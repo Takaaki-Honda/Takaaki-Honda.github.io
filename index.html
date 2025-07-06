@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ショート動画クリエイター</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="container">
+        <h1>ショート動画クリエイター</h1>
+
+        <div class="section">
+            <h2>1. 素材をアップロード</h2>
+            <p>動画にしたい画像を順番に選択してください。(複数選択可)</p>
+            <input type="file" id="image-input" accept="image/*" multiple>
+        </div>
+
+        <div class="section">
+            <h2>2. テキストを入力</h2>
+            <div id="text-inputs">
+                <div class="text-group">
+                    <input type="text" class="text-input" placeholder="テキスト1">
+                </div>
+            </div>
+             <button id="add-text-btn">テキストを追加</button>
+        </div>
+
+        <div class="section">
+            <h2>3. BGMを選択 (任意)</h2>
+            <input type="file" id="bgm-input" accept="audio/*">
+        </div>
+
+        <div class="section">
+            <h2>4. 動画を生成</h2>
+            <button id="create-video-btn">動画を作成する</button>
+            <div id="progress-area" style="display: none;">
+                <p id="progress-text">動画を生成中... (この処理には数分かかる場合があります)</p>
+                <progress id="progress-bar" value="0" max="100"></progress>
+            </div>
+        </div>
+    </div>
+
+   <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

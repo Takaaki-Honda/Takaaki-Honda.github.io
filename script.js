@@ -11,7 +11,7 @@ const progressBar = document.getElementById('progress-bar');
 // FFmpeg.wasmのコアライブラリを読み込むための準備
 const { createFFmpeg, fetchFile } = FFmpeg;
 const ffmpeg = createFFmpeg({
-    corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js', // コアパスを明示的に指定
+    corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.0/dist/ffmpeg-core.js', // 「core-st」バージョンに変更
     log: true, // 処理ログをコンソールに表示する
     progress: ({ ratio }) => {
         // 進捗をプログレスバーに反映

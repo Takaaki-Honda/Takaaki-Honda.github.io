@@ -11,12 +11,19 @@ const progressBar = document.getElementById('progress-bar');
 // FFmpeg.wasmのコアライブラリを読み込むための準備
 const { createFFmpeg, fetchFile } = FFmpeg;
 const ffmpeg = createFFmpeg({
-    log: true, // 処理ログをコンソ-ルに表示する
+    corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js', // コアパスを明示的に指定
+    log: true, // 処理ログをコンソールに表示する
     progress: ({ ratio }) => {
         // 進捗をプログレスバーに反映
-        progressBar.value = ratio * 100;
-        if (ratio === 1) {
-            progressArea.style.display = 'none';
+        let progress = ratio * 100;
+        if (progress < 0) progress = 0;
+        if (progress > 100) progress = 100;
+        progressBar.value = progress;
+        if (ratio >= 1) {
+            // 完了後少し待ってから非表示に
+            setTimeout(() => {
+                 progressArea.style.display = 'none';
+            }, 500);
         }
     },
 });
@@ -40,11 +47,11 @@ createVideoBtn.addEventListener('click', async () => {
     }
     
     // ---- 処理開始 ----
+    createVideoBtn.disabled = true; // ボタンを無効化
     progressText.textContent = '準備中...';
     progressArea.style.display = 'block';
     progressBar.value = 0;
     
-    // FFmpegがロードされていなければロードする（初回のみ）
     if (!ffmpeg.isLoaded()) {
         progressText.textContent = 'エンジンをロード中...';
         await ffmpeg.load();
@@ -52,66 +59,78 @@ createVideoBtn.addEventListener('click', async () => {
     
     // ---- ファイルをFFmpegに渡す ----
     progressText.textContent = 'ファイルを読み込み中...';
-    // 画像ファイルを読み込む
+    const imageFiles = [];
     for (let i = 0; i < imageInput.files.length; i++) {
         const file = imageInput.files[i];
-        ffmpeg.FS('writeFile', `image${i}.png`, await fetchFile(file));
+        const fileName = `image${i}.png`;
+        ffmpeg.FS('writeFile', fileName, await fetchFile(file));
+        imageFiles.push(fileName);
     }
-    // BGMファイルを読み込む
     if (bgmInput.files.length > 0) {
         ffmpeg.FS('writeFile', 'bgm.mp3', await fetchFile(bgmInput.files[0]));
     }
-    // フォントファイルを読み込む
     ffmpeg.FS('writeFile', '/fonts/NotoSansJP-Bold.ttf', await fetchFile('./fonts/NotoSansJP-Bold.ttf'));
-    
-    // ---- FFmpegのコマンドを作成 ----
-    const imageCount = imageInput.files.length;
-    const imageDuration = 3; // 1枚あたりの表示時間（秒）
-    const totalDuration = imageCount * imageDuration;
-    
-    const command = [
-        '-r', `1/${imageDuration}`,      // 1枚あたり3秒でフレームレートを設定
-        '-i', 'image%d.png',           // 連番の画像を入力
-    ];
 
-    // BGMがある場合は追加
-    if (bgmInput.files.length > 0) {
-        command.push('-i', 'bgm.mp3');
+    const selectedTemplate = document.querySelector('input[name="template"]:checked').value;
+    if (selectedTemplate === 'polaroid') {
+         ffmpeg.FS('writeFile', 'template1.png', await fetchFile('./template1.png'));
     }
 
-    // テキストを取得してフィルターコマンドを作成
-    const textFilters = [];
+    // ---- FFmpegのコマンドを作成 ----
+    const imageCount = imageFiles.length;
+    const imageDuration = 3; // 1枚あたりの表示時間
+    const fadeDuration = 0.5; // トランジションの時間
+    const totalDuration = imageCount * imageDuration;
+
+    const command = [];
+    // 入力ファイル
+    imageFiles.forEach(file => command.push('-i', file));
+    if (bgmInput.files.length > 0) command.push('-i', 'bgm.mp3');
+    if (selectedTemplate === 'polaroid') command.push('-i', 'template1.png');
+
+    // フィルター設定
+    let filterComplex = '';
+
+    // 1. 各画像をリサイズして9:16の黒背景に配置
+    for(let i = 0; i < imageCount; i++) {
+        filterComplex += `[${i}:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:-1:-1:color=black,setsar=1[v${i}];`;
+    }
+
+    // 2. トランジション（フェード）を適用
+    let lastStream = `v0`;
+    for(let i = 0; i < imageCount - 1; i++) {
+        const nextStream = `v${i+1}`;
+        const outputStream = `vt${i}`;
+        const offset = (i + 1) * imageDuration - fadeDuration;
+        filterComplex += `[${lastStream}][${nextStream}]xfade=transition=fade:duration=${fadeDuration}:offset=${offset}[${outputStream}];`;
+        lastStream = outputStream;
+    }
+
+    // 3. テキストを追加
     const textElements = document.querySelectorAll('.text-input');
     textElements.forEach((input, index) => {
-        if (input.value.trim() !== '') {
-            const text = input.value.trim().replace(/'/g, "''"); // シングルクォートをエスケープ
+        if (input.value.trim() !== '' && index < imageCount) {
+            const text = input.value.trim().replace(/'/g, "''");
             const startTime = index * imageDuration;
             const endTime = startTime + imageDuration;
-            // テキストを中央下部に表示するフィルター
-            textFilters.push(
-                `drawtext=fontfile='/fonts/NotoSansJP-Bold.ttf':text='${text}':fontsize=70:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10:x=(w-text_w)/2:y=h-th-h*0.2:enable='between(t,${startTime},${endTime})'`
-            );
+            filterComplex += `[${lastStream}]drawtext=fontfile='/fonts/NotoSansJP-Bold.ttf':text='${text}':fontsize=70:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10:x=(w-text_w)/2:y=h-th-h*0.2:enable='between(t,${startTime},${endTime})'[${lastStream}];`;
         }
     });
 
-    // フィルターを追加
-    let filterComplex = `scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:-1:-1:color=black,setsar=1`;
-    if (textFilters.length > 0) {
-        filterComplex += `,${textFilters.join(',')}`;
+    // 4. テンプレートを合成
+    if (selectedTemplate === 'polaroid') {
+        filterComplex += `[${lastStream}][${imageCount}]overlay[final_v]`;
+    } else {
+        filterComplex += `[${lastStream}]null[final_v]`;
     }
-    command.push('-vf', filterComplex);
 
-    // BGMがある場合の音声設定
+    command.push('-filter_complex', filterComplex);
+    command.push('-map', '[final_v]');
     if (bgmInput.files.length > 0) {
-        command.push('-c:a', 'aac', '-shortest'); // 音声コーデックと、映像が終わったら音声も終わる設定
+        command.push('-map', `${imageCount}:a?`, '-c:a', 'aac', '-shortest');
     }
     
-    command.push(
-        '-c:v', 'libx264',             // ビデオのエンコード形式
-        '-pix_fmt', 'yuv420p',         // 幅広い環境で再生できるカラー形式
-        '-t', String(totalDuration),   // 動画の全長
-        'output.mp4'                   // 出力ファイル名
-    );
+    command.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', String(totalDuration), 'output.mp4');
 
     // ---- FFmpeg実行 ----
     progressText.textContent = '動画を生成中... (この処理には数分かかる場合があります)';
@@ -130,7 +149,6 @@ createVideoBtn.addEventListener('click', async () => {
     a.click();
     document.body.removeChild(a);
 
-    // 使い終わったURLを解放
     URL.revokeObjectURL(url);
-    progressArea.style.display = 'none';
+    createVideoBtn.disabled = false; // ボタンを有効化
 });

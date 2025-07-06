@@ -8,19 +8,31 @@ const progressArea = document.getElementById('progress-area');
 const progressText = document.getElementById('progress-text');
 const progressBar = document.getElementById('progress-bar');
 
+// ★★★ ポラロイド画像のデータを直接コードに埋め込み ★★★
+const polaroidTemplateBase64 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABDgACgMAAABEt2yFAAAADFBMVEUAAAAAAAAsLCxsbGz7T30gAAAAAXRSTlMAQObYZgAAAFtJREFUeNrtwTEBAAAAwiD7p18Gj0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgHcl5AABa7gPIQAAAABJRU5ErkJggg==';
+
+// Base64をファイルデータに変換するヘルパー関数
+function base64ToUint8Array(base64) {
+    const binary_string = window.atob(base64.split(',')[1]);
+    const len = binary_string.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binary_string.charCodeAt(i);
+    }
+    return bytes;
+}
+
 // FFmpeg.wasmのコアライブラリを読み込むための準備
 const { createFFmpeg, fetchFile } = FFmpeg;
 const ffmpeg = createFFmpeg({
-    corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.0/dist/ffmpeg-core.js', // 「core-st」バージョンに変更
-    log: true, // 処理ログをコンソールに表示する
+    corePath: 'https://unpkg.com/@ffmpeg/core-st@0.11.0/dist/ffmpeg-core.js', // 「core-st」バージョン
+    log: true,
     progress: ({ ratio }) => {
-        // 進捗をプログレスバーに反映
         let progress = ratio * 100;
         if (progress < 0) progress = 0;
         if (progress > 100) progress = 100;
         progressBar.value = progress;
         if (ratio >= 1) {
-            // 完了後少し待ってから非表示に
             setTimeout(() => {
                  progressArea.style.display = 'none';
             }, 500);
@@ -40,14 +52,12 @@ addTextBtn.addEventListener('click', () => {
 
 // 「動画を作成する」ボタンが押されたときの処理
 createVideoBtn.addEventListener('click', async () => {
-    // ---- 入力チェック ----
     if (imageInput.files.length === 0) {
         alert('画像を1枚以上選択してください。');
         return;
     }
     
-    // ---- 処理開始 ----
-    createVideoBtn.disabled = true; // ボタンを無効化
+    createVideoBtn.disabled = true;
     progressText.textContent = '準備中...';
     progressArea.style.display = 'block';
     progressBar.value = 0;
@@ -57,7 +67,6 @@ createVideoBtn.addEventListener('click', async () => {
         await ffmpeg.load();
     }
     
-    // ---- ファイルをFFmpegに渡す ----
     progressText.textContent = 'ファイルを読み込み中...';
     const imageFiles = [];
     for (let i = 0; i < imageInput.files.length; i++) {
@@ -69,44 +78,42 @@ createVideoBtn.addEventListener('click', async () => {
     if (bgmInput.files.length > 0) {
         ffmpeg.FS('writeFile', 'bgm.mp3', await fetchFile(bgmInput.files[0]));
     }
+    // ★★★ フォントはこれまで通り外部から読み込み ★★★
     ffmpeg.FS('writeFile', '/fonts/NotoSansJP-Bold.ttf', await fetchFile('./fonts/NotoSansJP-Bold.ttf'));
 
     const selectedTemplate = document.querySelector('input[name="template"]:checked').value;
     if (selectedTemplate === 'polaroid') {
-         ffmpeg.FS('writeFile', 'template1.png', await fetchFile('./template1.png'));
+         // ★★★ 埋め込んだ画像データをFFmpegに渡す ★★★
+         const templateData = base64ToUint8Array(polaroidTemplateBase64);
+         ffmpeg.FS('writeFile', 'template1.png', templateData);
     }
 
-    // ---- FFmpegのコマンドを作成 ----
     const imageCount = imageFiles.length;
-    const imageDuration = 3; // 1枚あたりの表示時間
-    const fadeDuration = 0.5; // トランジションの時間
+    const imageDuration = 3;
+    const fadeDuration = 0.5;
     const totalDuration = imageCount * imageDuration;
 
     const command = [];
-    // 入力ファイル
     imageFiles.forEach(file => command.push('-i', file));
     if (bgmInput.files.length > 0) command.push('-i', 'bgm.mp3');
     if (selectedTemplate === 'polaroid') command.push('-i', 'template1.png');
 
-    // フィルター設定
     let filterComplex = '';
-
-    // 1. 各画像をリサイズして9:16の黒背景に配置
     for(let i = 0; i < imageCount; i++) {
         filterComplex += `[${i}:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:-1:-1:color=black,setsar=1[v${i}];`;
     }
 
-    // 2. トランジション（フェード）を適用
     let lastStream = `v0`;
-    for(let i = 0; i < imageCount - 1; i++) {
-        const nextStream = `v${i+1}`;
-        const outputStream = `vt${i}`;
-        const offset = (i + 1) * imageDuration - fadeDuration;
-        filterComplex += `[${lastStream}][${nextStream}]xfade=transition=fade:duration=${fadeDuration}:offset=${offset}[${outputStream}];`;
-        lastStream = outputStream;
+    if (imageCount > 1) {
+        for(let i = 0; i < imageCount - 1; i++) {
+            const nextStream = `v${i+1}`;
+            const outputStream = `vt${i}`;
+            const offset = (i + 1) * imageDuration - fadeDuration;
+            filterComplex += `[${lastStream}][${nextStream}]xfade=transition=fade:duration=${fadeDuration}:offset=${offset}[${outputStream}];`;
+            lastStream = outputStream;
+        }
     }
 
-    // 3. テキストを追加
     const textElements = document.querySelectorAll('.text-input');
     textElements.forEach((input, index) => {
         if (input.value.trim() !== '' && index < imageCount) {
@@ -117,9 +124,10 @@ createVideoBtn.addEventListener('click', async () => {
         }
     });
 
-    // 4. テンプレートを合成
     if (selectedTemplate === 'polaroid') {
-        filterComplex += `[${lastStream}][${imageCount}]overlay[final_v]`;
+        // ポラロイド合成時の入力ストリーム番号を動的に計算
+        const templateStreamIndex = bgmInput.files.length > 0 ? imageCount + 1 : imageCount;
+        filterComplex += `[${lastStream}][${templateStreamIndex}:v]overlay[final_v]`;
     } else {
         filterComplex += `[${lastStream}]null[final_v]`;
     }
@@ -132,11 +140,9 @@ createVideoBtn.addEventListener('click', async () => {
     
     command.push('-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', String(totalDuration), 'output.mp4');
 
-    // ---- FFmpeg実行 ----
     progressText.textContent = '動画を生成中... (この処理には数分かかる場合があります)';
     await ffmpeg.run(...command);
     
-    // ---- 生成された動画をダウンロード ----
     progressText.textContent = '完了！ダウンロードの準備をしています...';
     const data = ffmpeg.FS('readFile', 'output.mp4');
     const url = URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
@@ -150,5 +156,5 @@ createVideoBtn.addEventListener('click', async () => {
     document.body.removeChild(a);
 
     URL.revokeObjectURL(url);
-    createVideoBtn.disabled = false; // ボタンを有効化
+    createVideoBtn.disabled = false;
 });
